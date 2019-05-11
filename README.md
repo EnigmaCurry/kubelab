@@ -9,11 +9,9 @@ Check out the [kubespray
 docs](https://github.com/kubernetes-incubator/kubespray#documents) if
 you want to customize this further.
 
-Note: DigitalOcean is preparing to release their own Kubernetes
-platform soon, you may want to check that out. This uses many of the
-same pieces, as DigitalOcean open sources most of it. Having a DIY
-platform that you fully control, may still be desirable, so here you
-go.
+Note: DigitalOcean has now released their own Kubernetes as a service product.
+Prefer that for production workloads. However, having a DIY platform that you
+fully control, may still be desirable, so here you go.
 
 ## Requirements
 
@@ -70,8 +68,8 @@ The cluster nodes are where kubernetes runs, and are seperate from the kubelab c
 kubelab-ssh-keygen.sh
 ```
 
-Copy the text starting with with `ssh-rsa ....` and use it when
-creating cluster droplets.
+Copy the text starting with with `ssh-rsa ....` and use it when creating cluster
+droplets.
 
  - Login to your DigitalOcean account.
  - Create 3 or however many droplets using **Ubuntu 16.04**.
