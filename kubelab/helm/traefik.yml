@@ -1,0 +1,20 @@
+dashboard:
+  enabled: true
+  domain: traefik.k8s.example.com
+rbac:
+  enabled: true
+ssl:
+  enabled: true
+  enforced: true
+acme:
+  staging: false
+  enabled: true
+  email: "letsencrypt@example.com"
+  challengeType: dns-01
+  dnsProvider:
+    name: digitalocean
+    createSecret: false
+    domains:
+      enabled: true
+      domainsList:
+        - main: "*.k8s.example.com"

@@ -1,0 +1,6 @@
+#cloud-config
+
+## Ubuntu 16.04 ansible target
+
+runcmd:
+  - apt-get update && apt-get install -y python-minimal

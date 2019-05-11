@@ -1,0 +1,155 @@
+#cloud-config
+
+## Fedora Atomic kickstart for Ansible Kubernetes deployment
+
+write_files:
+  - path: "/usr/local/bin/post-install.sh"
+    permissions: "0750"
+    content: |
+      #!/bin/bash
+      # Post-Install tasks to do only on the first reboot
+      # This script will self destruct in 3,2,...
+
+      # Enable the newly installed docker service:
+      systemctl enable --now docker
+      sleep 2
+      
+      # Self Destruct!
+      echo "Post Installation tasks Complete."
+      systemctl disable post-install
+      rm /etc/systemd/system/post-install.service
+      rm /usr/local/bin/post-install.sh
+
+  - path: "/etc/systemd/system/post-install.service"
+    content: |
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/post-install.sh
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: "/usr/local/bin/kubelab-ssh-keygen.sh"
+    permissions: "0750"
+    content: |
+      #!/bin/bash
+      # Setup new kubelab ansible ssh keys
+      ssh-keygen -N '' -f $HOME/.ssh/kubelab && \
+      cat $HOME/.ssh/kubelab.pub >> $HOME/.ssh/authorized_keys && \
+      echo "Kubelab Ansible SSH pubkey:" && \
+      tail -1 $HOME/.ssh/authorized_keys
+      
+  - path: "/usr/local/bin/kubelab-setup.sh"
+    permissions: "0750"
+    content: |
+      #!/bin/bash
+      if [[ ! -v KUBELAB_HOME ]]; then
+          KUBELAB_HOME="/var/lib/kubelab"      
+      fi
+      
+      if [[ ! -v KUBELAB_GIT ]]; then
+          KUBELAB_GIT="https://github.com/EnigmaCurry/kubelab.git"
+      fi
+      
+      if [ -d "$KUBELAB_HOME/inventory/kubelab" ]; then
+          echo "kubelab alredy setup in $KUBELAB_HOME/inventory/kubelab"
+          echo "remove this directory before running setup again."
+          exit 1
+      fi
+
+      for n in DROPLET_IPS DIGITALOCEAN_API_TOKEN DOMAIN EMAIL; do
+          if [[ ! -v $n ]]; then
+              echo "$n not set"
+              exit 1
+          fi
+      done
+      
+      # Setup ansible + kubelab
+      git clone $KUBELAB_GIT $KUBELAB_HOME
+      # Build ansible docker image (if not already)
+      docker inspect --type=image kubelab > /dev/null
+      [ $? -ne 0 ] && docker build -t kubelab $KUBELAB_HOME
+      [ $? -ne 0 ] && exit 1
+
+      # Configure kubelab ansible inventory
+      cp -a $KUBELAB_HOME/inventory/sample $KUBELAB_HOME/inventory/kubelab
+      docker run --rm -t -v $KUBELAB_HOME/inventory:/kubespray/inventory \
+                 -e CONFIG_FILE=inventory/kubelab/hosts.ini \
+                 kubelab \
+                 python3 contrib/inventory_builder/inventory.py $DROPLET_IPS
+      sed -i -e "s/^digitalocean_api_token:.*/digitalocean_api_token: '$DIGITALOCEAN_API_TOKEN'/" \
+             -e "s/^traefik_email:.*/traefik_email: '$EMAIL'/" \
+             -e "s/^traefik_domain_wildcard:.*/traefik_domain_wildcard: '*.$DOMAIN'/" \
+             -e "s/^traefik_dashboard_domain:.*/traefik_dashboard_domain: 'traefik.$DOMAIN'/" \
+             $KUBELAB_HOME/inventory/kubelab/group_vars/k8s-cluster/k8s-cluster.yml
+                 
+      # Configure ssh aliases for cluster node
+      rm -f $HOME/.ssh/config
+      IFS=' ' read -a nodes <<< "${DROPLET_IPS}"
+      for n in ${!nodes[@]}; do
+      cat <<EOF >> $HOME/.ssh/config
+      Host node$((n+1))
+          Hostname ${nodes[$n]}
+          User root
+          IdentityFile $HOME/.ssh/kubelab
+      EOF
+      done
+      
+      echo "Configuration created in $KUBELAB_HOME/inventory/kubelab"
+      echo "Run kubelab-deploy.sh to deploy the cluster"
+      
+  - path: "/usr/local/bin/kubelab-playbook.sh"
+    permissions: "0750"
+    content: |
+      #!/bin/bash
+      if [[ ! -v KUBELAB_HOME ]]; then
+             KUBELAB_HOME="/var/lib/kubelab"      
+      fi
+      docker run --rm -t -v $KUBELAB_HOME:/kubespray \
+             -v $HOME/.ssh/kubelab:$HOME/.ssh/id_rsa \
+             kubelab \
+             ansible-playbook -i inventory/kubelab/hosts.ini $1
+
+  - path: "/usr/local/bin/kubelab-deploy.sh"
+    permissions: "0750"
+    content: |
+      #!/bin/bash
+      ## Deploy kubespray cluster and kubelab:
+      /usr/local/bin/kubelab-playbook.sh cluster.yml && \
+      mkdir -p $HOME/.kube && \
+      scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -r node1:.kube/config $HOME/.kube/config && \
+      /usr/local/bin/kubelab-playbook.sh kubelab.yml
+
+  - path: "/etc/docker/daemon.json"
+    content: |
+      {
+        "storage-driver": "overlay2"
+      }
+      
+  - path: "/etc/yum.repos.d/docker.repo"
+    content: |
+      [docker-ce-stable]
+      name=Docker CE Stable - $basearch
+      baseurl=https://download.docker.com/linux/fedora/$releasever/$basearch/stable
+      enabled=1
+      gpgcheck=1
+      gpgkey=https://download.docker.com/linux/fedora/gpg
+
+  - path: "/etc/yum.repos.d/kubernetes.repo"
+    content: |
+      [kubernetes]
+      name=Kubernetes
+      baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+      enabled=1
+      gpgcheck=1
+      repo_gpgcheck=1
+      gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+
+runcmd:
+  - ln -s /etc/systemd/system/post-install.service /etc/systemd/system/multi-user.target.wants/post-install.service
+  # Upgrade Docker
+  - rpm-ostree override remove docker docker-common cockpit-docker
+  # Install initial dependencies:
+  - atomic host install git docker-ce kubectl go emacs-nox vim nano
+  # Reboot using the new os-tree:
+  - systemctl reboot
+  # post-install systemd service now finalizes setup on the first reboot. 
